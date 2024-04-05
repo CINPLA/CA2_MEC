@@ -18,9 +18,11 @@ import quantities as pq
 import neo
 import pandas as pd
 import numpy as np
-
+from expipe_plugin_cinpla.data_loader import (
+    load_epochs, get_channel_groups, load_spiketrains, load_unit_annotations,
+    load_leds, get_duration, load_lfp, get_sample_rate, get_data_path
+)
 import spikeextractors as se
-import exdir
 import expipe
 from utils import *
 
@@ -91,11 +93,7 @@ def persistent_trials(spikes, persistent_trials):
 
 
 def project_path():
-    path = os.environ.get("LEC_PATH")
-    if path is None:
-        raise Exception("Need to set `CA2MEC_PATH` as environment variable first.")
-    else:
-        path = pathlib.Path(path)
+    path = pathlib.Path("/projects/ec109/maria/mec_social")
     return path
 
 
@@ -363,18 +361,18 @@ def rm_nans(*args):
     return out
 
 
-def load_leds(data_path):
-    root_group = exdir.File(data_path, "r", plugins=[exdir.plugins.quantities])
+# def load_leds(data_path):
+#     root_group = exdir.File(data_path, "r", plugins=[exdir.plugins.quantities])
 
-    # tracking data
-    position_group = root_group["processing"]["tracking"]["camera_0"]["Position"]
-    stop_time = position_group.attrs["stop_time"]
-    x1, y1 = position_group["led_0"]["data"].data.T
-    t1 = position_group["led_0"]["timestamps"].data
-    x2, y2 = position_group["led_1"]["data"].data.T
-    t2 = position_group["led_1"]["timestamps"].data
+#     # tracking data
+#     position_group = root_group["processing"]["tracking"]["camera_0"]["Position"]
+#     stop_time = position_group.attrs["stop_time"]
+#     x1, y1 = position_group["led_0"]["data"].data.T
+#     t1 = position_group["led_0"]["timestamps"].data
+#     x2, y2 = position_group["led_1"]["data"].data.T
+#     t2 = position_group["led_1"]["timestamps"].data
 
-    return x1, y1, t1, x2, y2, t2, stop_time
+#     return x1, y1, t1, x2, y2, t2, stop_time
 
 
 def filter_xy_zero(x, y, t):

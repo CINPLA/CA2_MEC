@@ -3,7 +3,7 @@ import numpy.ma as ma
 import scipy
 import neo
 import expipe
-import dataloader as dl
+from . import project_path as dl
 import spatial_maps as sp
 
 import elephant

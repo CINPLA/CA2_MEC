@@ -22,9 +22,10 @@ from expipe_plugin_cinpla.data_loader import (
     load_epochs, get_channel_groups, load_spiketrains, load_unit_annotations,
     load_leds, get_duration, load_lfp, get_sample_rate, get_data_path
 )
+from .project_path import project_path
 import spikeextractors as se
 import expipe
-from utils import *
+from .utils import cell_rate, trial_identity
 
 
 def in_brain_regions(spikes, brain_regions=["ca2"]):
@@ -92,26 +93,14 @@ def persistent_trials(spikes, persistent_trials):
     ]
 
 
-def project_path():
-    path = pathlib.Path("/projects/ec109/maria/mec_social")
-    return path
+def action_data_path(action_id):
+    return project_path() / "actions" / action_id / "data"
 
 
-def action_path(action_id):
-    return project_path() / "actions" / action_id / "data" / "main.exdir"
-
-
-def get_duration(data_path):
-    f = exdir.File(str(data_path), "r", plugins=[exdir.plugins.quantities])
-
-    return f.attrs["session_duration"].rescale("s")
-
-
-def load_spiketrains(
+def load_and_populate_spiketrains(
     action_id,
     load_spikes=True,
     channel_group=None,
-    load_waveforms=False,
     lim=None,
     identify_neurons=False,
 ):
@@ -131,49 +120,12 @@ def load_spiketrains(
     if identify_neurons:
         identify_neurons_df = project.require_action("identify-neurons")
         identify_neurons_df = pd.read_csv(identify_neurons_df.data_path() / "units.csv")
-
-    sorting = se.ExdirSortingExtractor(
-        action_path(action_id),
-        channel_group=channel_group,
-        load_waveforms=load_waveforms,
-    )
+    if load_spikes:
+        sts = load_spiketrains(action_data_path(action_id) / "main.nwb", channel_group=channel_group, lim=lim)
+    else:
+        sts = load_unit_annotations(action_data_path(action_id) / "main.nwb", channel_group=channel_group)
     mua_df = load_action_mua(action_id)
-    cluster_info_df = load_group_id(action_id)
-    sptr = []
-    # build neo objects
-    for u in sorting.get_unit_ids():
-        times = (
-            sorting.get_unit_spike_train(u) / (sorting.get_sampling_frequency() * pq.Hz)
-            if load_spikes
-            else [] * pq.s
-        )
-        if lim is None:
-            t_stop = get_duration(action_path(action_id))
-            t_start = 0 * pq.s
-        else:
-            t_start = pq.Quantity(lim[0], "s")
-            t_stop = pq.Quantity(lim[1], "s")
-        mask = (times >= t_start) & (times <= t_stop)
-        times = times[mask]
-        if load_waveforms and "waveforms" in sorting.get_unit_spike_feature_names(u):
-            wf = sorting.get_unit_spike_features(u, "waveforms")
-            wf = wf[mask] * pq.uV
-        else:
-            wf = None
-        st = neo.SpikeTrain(
-            times=times,
-            t_stop=t_stop,
-            waveforms=wf,
-            sampling_rate=sorting.get_sampling_frequency() * pq.Hz,
-        )
-        for p in sorting.get_unit_property_names(u):
-            if p == "group_id":
-                unit_id = int(sorting.get_unit_property(u, 'name').split("#")[-1])
-                group_id = cluster_info_df.loc[cluster_info_df['id'] == unit_id,'ch_group']
-                st.annotations.update({p: group_id.values[0]})
-            else:
-                st.annotations.update({p: sorting.get_unit_property(u, p)})
-
+    for st in sts:
         # set unit name to int
         st.annotations.update({"name": int(st.annotations["name"].split("#")[-1])})
         st.annotations["unit_name"] = st.annotations.pop(
@@ -200,9 +152,7 @@ def load_spiketrains(
         if identify_neurons:
             add_identify_neurons(st, identify_neurons_df)
 
-        sptr.append(st)
-
-    return sptr
+    return sts
 
 
 def correct_mua(sptr, only_good_mua=False):
@@ -227,10 +177,10 @@ def correct_mua(sptr, only_good_mua=False):
     return sptr
 
 
-def load_action_mua(action_id):
+def load_action_mua(action_id, sorter="mountainsort4"):
     mua_path = (
-        action_path(action_id)
-        / "processing/electrophysiology/spikesorting/mountainsort4/phy/cluster_group.tsv"
+        action_data_path(action_id)
+        / "spikeinterface/mountainsort4/phy/cluster_group.tsv"
     )
     df = pd.read_csv(mua_path, sep="\t")
     return df
@@ -239,7 +189,7 @@ def load_group_id(action_id):
     # group_id is the same as ch_group ---- of course...
     group_id_path = (
         action_path(action_id)
-        / "processing/electrophysiology/spikesorting/mountainsort4/phy/cluster_info.tsv"
+        / "spikeinterface/mountainsort4/phy/cluster_info.tsv"
     )
     cluster_group_pd_table = pd.read_csv(group_id_path, sep="\t")
     # if 'ch_group' is nan for some units, infer them based on 'ch'
@@ -406,7 +356,7 @@ def load_head_direction(
 ):
     from head_direction.head import head_direction
 
-    data_path = action_path(action_id)
+    data_path = action_data_path(action_id) / "main.nwb"
 
     x1, y1, t1, x2, y2, t2, stop_time = load_leds(data_path)
     x1, y1, t1 = rm_nans(x1, y1, t1)
@@ -474,13 +424,13 @@ def load_tracking(
     velocity_threshold=5,
     ca2_transform_data=False,
 ):
-    data_path = action_path(action_id)
+    data_path = action_data_path(action_id) / "main.nwb"
 
     x1, y1, t1, x2, y2, t2, stop_time = load_leds(data_path)
     x1, y1, t1 = rm_nans(x1, y1, t1)
     x2, y2, t2 = rm_nans(x2, y2, t2)
-    x1, y1, t1 = filter_t_zero_duration(x1, y1, t1, stop_time.magnitude)
-    x2, y2, t2 = filter_t_zero_duration(x2, y2, t2, stop_time.magnitude)
+    x1, y1, t1 = filter_t_zero_duration(x1, y1, t1, stop_time)
+    x2, y2, t2 = filter_t_zero_duration(x2, y2, t2, stop_time)
 
     # select data with least nan
     if len(x1) > len(x2):
